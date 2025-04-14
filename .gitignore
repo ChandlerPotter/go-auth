@@ -1,0 +1,9 @@
+# Go
+bin/
+*.exe
+*.test
+*.out
+
+# Docker
+pgdata/
+.env
