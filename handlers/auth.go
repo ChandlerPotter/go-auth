@@ -13,8 +13,7 @@ import (
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
-	// Role could be optional or user-provided
-	Role string `json:"role"`
+	RoleID   uint   `json:"uint"`
 }
 
 func Register(c *gin.Context) {
@@ -43,6 +42,7 @@ func Register(c *gin.Context) {
 	user := models.User{
 		Username:     req.Username,
 		PasswordHash: string(hashedPassword),
+		RoleID:       req.RoleID,
 	}
 
 	if err := database.DB.Create(&user).Error; err != nil {
@@ -54,5 +54,9 @@ func Register(c *gin.Context) {
 }
 
 func LogUserIn(c *gin.Context) {
-
+	var req RegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 }
