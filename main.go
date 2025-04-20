@@ -3,8 +3,9 @@ package main
 import (
 	"os"
 
-	"like-hub/database"
-	"like-hub/handlers"
+	_ "go-auth/config"
+	"go-auth/database"
+	"go-auth/handlers"
 
 	"github.com/gin-gonic/gin"
 )
