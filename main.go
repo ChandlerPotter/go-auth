@@ -21,6 +21,7 @@ func main() {
 
 	// Public route to register user
 	r.POST("/register", handlers.Register)
+	r.POST("/login", handlers.Login)
 
 	// Example: test route
 	r.GET("/ping", func(c *gin.Context) {
