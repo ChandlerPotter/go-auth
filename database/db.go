@@ -9,7 +9,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"like-hub/models"
+	"go-auth/models"
 )
 
 // DB is a global variable to hold the database connection.

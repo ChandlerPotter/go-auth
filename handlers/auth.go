@@ -6,14 +6,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
-	"like-hub/database"
-	"like-hub/models"
+	"go-auth/database"
+	"go-auth/models"
 )
 
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
-	RoleID   uint   `json:"uint"`
+	RoleID   uint   `json:"roleId"   binding:"required"`
 }
 
 func Register(c *gin.Context) {
