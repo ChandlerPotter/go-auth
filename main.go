@@ -6,6 +6,7 @@ import (
 	_ "go-auth/config"
 	"go-auth/database"
 	"go-auth/handlers"
+	"go-auth/middleware"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,6 +23,14 @@ func main() {
 	// Public route to register user
 	r.POST("/register", handlers.Register)
 	r.POST("/login", handlers.Login)
+	r.POST("/refresh", handlers.RefreshToken)
+
+	// Register a protected route
+	protected := r.Group("/")
+	protected.Use(middleware.JWTAuthMiddleware())
+	{
+		protected.GET("/me", handlers.GetCurrentUser)
+	}
 
 	// Example: test route
 	r.GET("/ping", func(c *gin.Context) {
