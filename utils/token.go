@@ -4,23 +4,27 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func GenerateRandomRefreshToken(length int) (string, string, error) {
+func GenerateRandomRefreshToken(length int) (raw string, hash []byte, err error) {
 	bytes := make([]byte, length)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		return "", "", err
+	if _, err = rand.Read(bytes); err != nil {
+		return
 	}
 
-	raw := base64.URLEncoding.EncodeToString(bytes) // what the client sees
+	raw = base64.URLEncoding.EncodeToString(bytes) // what the client sees
+	sum := sha256.Sum256([]byte(raw))
+	hash = sum[:] // 32-byte slice
+
+	return // <- naked return is fine; named vars carry the values
+}
+
+func HashRefreshToken(raw string) []byte {
 	h := sha256.Sum256([]byte(raw))
-	hash := hex.EncodeToString(h[:]) // what we keep
-	return raw, hash, nil
+	return h[:]
 }
 
 type Claims struct {
