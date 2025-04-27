@@ -21,9 +21,12 @@ func main() {
 	r := gin.Default()
 
 	// Public route to register user
-	r.POST("/register", handlers.Register)
-	r.POST("/login", handlers.Login)
-	r.POST("/refresh", handlers.RefreshToken)
+	auth := r.Group("/auth")
+	{
+		auth.POST("/register", handlers.Register)
+		auth.POST("/login", handlers.Login)
+		auth.POST("/refresh", handlers.RefreshToken)
+	}
 
 	// Register a protected route
 	protected := r.Group("/")
