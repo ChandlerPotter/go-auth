@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"go-auth/database"
 	"go-auth/models"
@@ -109,7 +112,7 @@ func Login(c *gin.Context) {
 	}
 
 	// Generate a refresh token
-	refreshTokenString, hashedTokenString, err := utils.GenerateRandomRefreshToken(32)
+	refreshTokenString, hashedRefreshToken, err := utils.GenerateRandomRefreshToken(32)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not generate refresh token string"})
 		return
@@ -118,7 +121,7 @@ func Login(c *gin.Context) {
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
 
 	refreshToken := models.RefreshToken{
-		TokenHash: hashedTokenString, // Store hashed token
+		TokenHash: hashedRefreshToken, // Store hashed token
 		UserID:    user.ID,
 		ExpiresAt: expiresAt,
 	}
@@ -157,6 +160,8 @@ func GetCurrentUser(c *gin.Context) {
 	})
 }
 
+var errInvalidRefresh = errors.New("invalid refresh token")
+
 func RefreshToken(c *gin.Context) {
 	var req RefreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -164,34 +169,57 @@ func RefreshToken(c *gin.Context) {
 		return
 	}
 
-	var refreshToken models.RefreshToken
-	if err := database.DB.Where("token = ?", req.RefreshToken).First(&refreshToken).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
-		return
-	}
+	hash := utils.HashRefreshToken(req.RefreshToken)
 
-	if time.Now().After(refreshToken.ExpiresAt) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "refresh token expired"})
-		return
-	}
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var refreshToken models.RefreshToken
 
-	var user models.User
-	if err := database.DB.Preload("Role").First(&user, refreshToken.UserID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "user not found"})
-		return
-	}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Preload("User.Role").
+			Where("token_hash = ? AND expires_at > ?", hash, time.Now()).
+			First(&refreshToken).Error; err != nil {
 
-	// Sign the token
-	secret := os.Getenv("JWT_SECRET")
+			return errors.New("invalid refresh token")
+		}
+		// Rotate Refresh token
+		newRaw, newHash, _ := utils.GenerateRandomRefreshToken(32)
 
-	// Create JWT token
-	tokenString, err := utils.GenerateAccessToken(user.ID, user.Role.Name, 30*time.Minute, []byte(secret))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not sign token"})
+		refreshToken.TokenHash = newHash
+		refreshToken.ExpiresAt = time.Now().Add(7 * 24 * time.Hour)
+
+		if err := tx.Save(&refreshToken).Error; err != nil {
+			return err
+		}
+
+		// Sign the token
+		secret := os.Getenv("JWT_SECRET")
+
+		// Create JWT token
+		accessTokenString, err := utils.GenerateAccessToken(
+			refreshToken.User.ID,
+			refreshToken.User.Role.Name,
+			30*time.Minute,
+			[]byte(secret))
+		if err != nil {
+			return err
+		}
+
+		c.Set("token", accessTokenString)
+		c.Set("refresh_token", newRaw) // plain-text copy for the client
+		return nil
+
+	}); err != nil {
+		if errors.Is(err, errInvalidRefresh) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
+		} else {
+			log.Printf("refresh-tx error: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+		}
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"token": tokenString,
+		"token":         c.MustGet("token"),
+		"refresh_token": c.MustGet("refresh_token"),
 	})
 }
