@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"go-auth/database"
@@ -94,14 +93,6 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// Create JWT token
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": user.ID,
-		"role":    user.Role.Name,
-		"exp":     time.Now().Add(time.Hour * 72).Unix(), // token expires in 3 days
-		"iat":     time.Now().Unix(),                     // time token was issued
-	})
-
 	// Sign the token
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
@@ -110,14 +101,15 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	tokenString, err := token.SignedString([]byte(secret))
+	// Create JWT token
+	tokenString, err := utils.GenerateAccessToken(user.ID, user.Role.Name, 30*time.Minute, []byte(secret))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not sign token"})
 		return
 	}
 
 	// Generate a refresh token
-	refreshTokenString, err := utils.GenerateRandomToken(32)
+	refreshTokenString, hashedTokenString, err := utils.GenerateRandomRefreshToken(32)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not generate refresh token string"})
 		return
@@ -126,7 +118,7 @@ func Login(c *gin.Context) {
 	expiresAt := time.Now().Add(7 * 24 * time.Hour)
 
 	refreshToken := models.RefreshToken{
-		Token:     refreshTokenString,
+		TokenHash: hashedTokenString, // Store hashed token
 		UserID:    user.ID,
 		ExpiresAt: expiresAt,
 	}
@@ -189,17 +181,11 @@ func RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Create JWT token
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": user.ID,
-		"role":    user.Role.Name,
-		"exp":     time.Now().Add(time.Hour * 72).Unix(), // 3 days expiration
-		"iat":     time.Now().Unix(),                     // issued at
-	})
-
 	// Sign the token
 	secret := os.Getenv("JWT_SECRET")
-	tokenString, err := token.SignedString([]byte(secret))
+
+	// Create JWT token
+	tokenString, err := utils.GenerateAccessToken(user.ID, user.Role.Name, 30*time.Minute, []byte(secret))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not sign token"})
 		return
