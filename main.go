@@ -1,31 +1,45 @@
 package main
 
 import (
+	"log"
 	"os"
 
 	_ "go-auth/config"
 	"go-auth/database"
-	"go-auth/handlers"
+	handlers "go-auth/handlers/auth"
 	"go-auth/middleware"
+	"go-auth/stores"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	database.ConnectDB()
+	db, err := database.ConnectDB()
+	if err != nil {
+		log.Fatalf("Database connection error: %v", err)
+	}
 
-	// Perform migrations
-	database.ProcessMigrations()
+	// 2) Run migrations
+	database.ProcessMigrations(db)
+
+	userStore := &stores.GormUserStore{DB: db}
+	secret := []byte(os.Getenv("JWT_SECRET"))
+	hasher := handlers.BcryptHasher{}
+	tokenService := &handlers.JWTService{
+		Secret: secret,
+	}
+
+	auth := handlers.NewAuthHandler(userStore, secret, hasher, tokenService)
 
 	// Initialize router
 	r := gin.Default()
 
 	// Public route to register user
-	auth := r.Group("/auth")
+	authGroup := r.Group("/auth")
 	{
-		auth.POST("/register", handlers.Register)
-		auth.POST("/login", handlers.Login)
-		auth.POST("/refresh", handlers.RefreshToken)
+		authGroup.POST("/register", auth.Register)
+		authGroup.POST("/login", auth.Login)
+		authGroup.POST("/refresh", auth.RefreshToken)
 	}
 
 	// Register a protected route

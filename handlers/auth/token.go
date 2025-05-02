@@ -1,4 +1,4 @@
-package utils
+package handlers
 
 import (
 	"crypto/rand"
@@ -9,7 +9,11 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func GenerateRandomRefreshToken(length int) (raw string, hash []byte, err error) {
+type JWTService struct {
+	Secret []byte
+}
+
+func (s *JWTService) GenerateRandomRefreshToken(length int) (raw string, hash []byte, err error) {
 	bytes := make([]byte, length)
 	if _, err = rand.Read(bytes); err != nil {
 		return
@@ -22,7 +26,7 @@ func GenerateRandomRefreshToken(length int) (raw string, hash []byte, err error)
 	return // <- naked return is fine; named vars carry the values
 }
 
-func HashRefreshToken(raw string) []byte {
+func (s *JWTService) HashRefreshToken(raw string) []byte {
 	h := sha256.Sum256([]byte(raw))
 	return h[:]
 }
@@ -33,7 +37,7 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func GenerateAccessToken(userID uint, role string, ttl time.Duration, secret []byte) (string, error) {
+func (s *JWTService) GenerateAccessToken(userID uint, role string, ttl time.Duration) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		UserID: userID,
@@ -44,5 +48,5 @@ func GenerateAccessToken(userID uint, role string, ttl time.Duration, secret []b
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(secret)
+	return token.SignedString(s.Secret)
 }

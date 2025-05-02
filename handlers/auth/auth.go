@@ -4,17 +4,15 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"go-auth/database"
 	"go-auth/models"
-	"go-auth/utils"
+	"go-auth/stores"
 )
 
 type RegisterRequest struct {
@@ -32,15 +30,45 @@ type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
 }
 
-func Register(c *gin.Context) {
+type PasswordHasher interface {
+	Hash(password []byte) ([]byte, error)
+	Compare(hash, password []byte) error
+}
+
+type TokenService interface {
+	GenerateRandomRefreshToken(length int) (raw string, hash []byte, err error)
+	HashRefreshToken(raw string) []byte
+	GenerateAccessToken(userID uint, role string, ttl time.Duration) (string, error)
+}
+
+type AuthHandler struct {
+	Store        stores.UserStore
+	Secret       []byte
+	Hasher       PasswordHasher
+	TokenService TokenService
+}
+
+// NewAuthHandler constructs an AuthHandler.
+func NewAuthHandler(
+	store stores.UserStore,
+	secret []byte,
+	hasher PasswordHasher,
+	tokenService TokenService,
+) *AuthHandler {
+	return &AuthHandler{
+		Store:        store,
+		Secret:       secret,
+		Hasher:       hasher,
+		TokenService: tokenService,
+	}
+}
+
+func (h *AuthHandler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	// 1. Check if user exists
-	var existing models.User
 
 	// validate username length
 	if len(req.Username) < 8 {
@@ -48,26 +76,29 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	if err := database.DB.Where("username = ?", req.Username).First(&existing).Error; err == nil {
+	if _, err := h.Store.FindByUsername(req.Username); err == nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "Username already taken"})
+		return
+	} else if !errors.Is(err, stores.ErrNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
 		return
 	}
 
 	// 2. Hash the password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hashedPassword, err := h.Hasher.Hash([]byte(req.Password))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "error hashing password"})
 		return
 	}
 
 	// 3. Create the user record
-	user := models.User{
+	user := &models.User{
 		Username:     req.Username,
 		PasswordHash: string(hashedPassword),
 		RoleID:       req.RoleID,
 	}
 
-	if err := database.DB.Create(&user).Error; err != nil {
+	if err := h.Store.CreateUser(user); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
 		return
 	}
@@ -75,7 +106,7 @@ func Register(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "user registered successfully"})
 }
 
-func Login(c *gin.Context) {
+func (h *AuthHandler) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
@@ -84,35 +115,27 @@ func Login(c *gin.Context) {
 
 	// Find user by username
 	var user models.User
-	if err := database.DB.Preload("Role").Where("username = ?", req.Username).First(&user).Error; err != nil {
+	if _, err := h.Store.FindByUsername(req.Username); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid username or password"})
 		return
 	}
 
 	// Compare password hash
-	err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password))
+	err := h.Hasher.Compare([]byte(user.PasswordHash), []byte(req.Password))
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid username or password"})
 		return
 	}
 
-	// Sign the token
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		log.Println("⚠️ JWT_SECRET not set in env")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "server configuration error"})
-		return
-	}
-
 	// Create JWT token
-	tokenString, err := utils.GenerateAccessToken(user.ID, user.Role.Name, 30*time.Minute, []byte(secret))
+	tokenString, err := h.TokenService.GenerateAccessToken(user.ID, user.Role.Name, 30*time.Minute)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not sign token"})
 		return
 	}
 
 	// Generate a refresh token
-	refreshTokenString, hashedRefreshToken, err := utils.GenerateRandomRefreshToken(32)
+	refreshTokenString, hashedRefreshToken, err := h.TokenService.GenerateRandomRefreshToken(32)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not generate refresh token string"})
 		return
@@ -162,14 +185,14 @@ func GetCurrentUser(c *gin.Context) {
 
 var errInvalidRefresh = errors.New("invalid refresh token")
 
-func RefreshToken(c *gin.Context) {
+func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	var req RefreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
 
-	hash := utils.HashRefreshToken(req.RefreshToken)
+	hash := h.TokenService.HashRefreshToken(req.RefreshToken)
 
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		var refreshToken models.RefreshToken
@@ -182,7 +205,7 @@ func RefreshToken(c *gin.Context) {
 			return errors.New("invalid refresh token")
 		}
 		// Rotate Refresh token
-		newRaw, newHash, _ := utils.GenerateRandomRefreshToken(32)
+		newRaw, newHash, _ := h.TokenService.GenerateRandomRefreshToken(32)
 
 		refreshToken.TokenHash = newHash
 		refreshToken.ExpiresAt = time.Now().Add(7 * 24 * time.Hour)
@@ -191,15 +214,11 @@ func RefreshToken(c *gin.Context) {
 			return err
 		}
 
-		// Sign the token
-		secret := os.Getenv("JWT_SECRET")
-
 		// Create JWT token
-		accessTokenString, err := utils.GenerateAccessToken(
+		accessTokenString, err := h.TokenService.GenerateAccessToken(
 			refreshToken.User.ID,
 			refreshToken.User.Role.Name,
-			30*time.Minute,
-			[]byte(secret))
+			30*time.Minute)
 		if err != nil {
 			return err
 		}
