@@ -9,45 +9,40 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"go-auth/models"
+	"go-auth/internal/models"
 )
 
 // DB is a global variable to hold the database connection.
 var DB *gorm.DB
 
 // ConnectDB initializes the connection to PostgreSQL using GORM.
-func ConnectDB() {
+func ConnectDB() (*gorm.DB, error) {
 
-	err := godotenv.Load()
-	if err != nil {
+	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found or error loading .env file")
-		// You can decide if you want this to be a fatal error or not
 	}
 
-	host := os.Getenv("DB_HOST")
-	user := os.Getenv("DB_USER")
-	password := os.Getenv("DB_PASSWORD")
-	dbname := os.Getenv("DB_NAME")
-	port := os.Getenv("DB_PORT")
-	sslmode := os.Getenv("DB_SSLMODE") // often "disable" for local dev
-
-	fmt.Printf("Connecting to DB at host=%s user=%s password=%s dbname=%s...\n", host, user, password, dbname)
-
-	// Build DSN (Data Source Name) string
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s",
-		host, user, password, dbname, port, sslmode,
+	dsn := fmt.Sprintf(
+		"host=%s user=%s password=%s dbname=%s port=%s sslmode=%s",
+		os.Getenv("DB_HOST"),
+		os.Getenv("DB_USER"),
+		os.Getenv("DB_PASSWORD"),
+		os.Getenv("DB_NAME"),
+		os.Getenv("DB_PORT"),
+		os.Getenv("DB_SSLMODE"),
 	)
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		log.Fatal("Failed to connect to the database: ", err)
+		return nil, fmt.Errorf("failed to connect to the database: %w", err)
 	}
 
 	DB = db
 	log.Println("Database connection established")
+	return db, nil
 }
 
-func ProcessMigrations() {
+func ProcessMigrations(db *gorm.DB) {
 	err := DB.AutoMigrate(
 		&models.User{},
 		&models.Role{},
