@@ -6,9 +6,11 @@ import (
 
 	_ "go-auth/config"
 	"go-auth/database"
-	handlers "go-auth/handlers/auth"
-	"go-auth/middleware"
-	"go-auth/stores"
+	handlers "go-auth/internal/handlers/auth"
+	"go-auth/internal/middleware"
+	"go-auth/internal/stores"
+	"go-auth/internal/token"
+	"go-auth/internal/user"
 
 	"github.com/gin-gonic/gin"
 )
@@ -24,12 +26,20 @@ func main() {
 
 	userStore := &stores.GormUserStore{DB: db}
 	secret := []byte(os.Getenv("JWT_SECRET"))
-	hasher := handlers.BcryptHasher{}
-	tokenService := &handlers.JWTService{
-		Secret: secret,
+	hasher := user.BcryptHasher{}
+	tokenService := &token.JWTService{Secret: secret}
+
+	refreshTokenStore := &stores.GormRefreshTokenStore{
+		DB:           db,
+		TokenService: tokenService,
 	}
 
-	auth := handlers.NewAuthHandler(userStore, secret, hasher, tokenService)
+	auth := handlers.NewAuthHandler(
+		userStore,
+		refreshTokenStore,
+		secret,
+		hasher,
+		tokenService)
 
 	// Initialize router
 	r := gin.Default()
@@ -46,7 +56,7 @@ func main() {
 	protected := r.Group("/")
 	protected.Use(middleware.JWTAuthMiddleware())
 	{
-		protected.GET("/me", handlers.GetCurrentUser)
+		protected.GET("/me", auth.GetCurrentUser)
 	}
 
 	// Example: test route
