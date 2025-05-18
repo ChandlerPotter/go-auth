@@ -50,6 +50,7 @@ func main() {
 		authGroup.POST("/register", auth.Register)
 		authGroup.POST("/login", auth.Login)
 		authGroup.POST("/refresh", auth.RefreshToken)
+		authGroup.POST("/logout", auth.Logout)
 	}
 
 	// Register a protected route
