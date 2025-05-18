@@ -20,6 +20,7 @@ type RotateResult struct {
 type RefreshTokenStore interface {
 	CreateRefreshToken(rt *models.RefreshToken) error
 	Rotate(hash []byte, now time.Time, ttl time.Duration) (RotateResult, error)
+	RevokeRefreshToken(tokenHash []byte) error
 }
 
 // GormUserStore implements RefreshTokenStore using GORM.
@@ -32,17 +33,28 @@ func (s *GormRefreshTokenStore) CreateRefreshToken(rt *models.RefreshToken) erro
 	return s.DB.Create(rt).Error
 }
 
-func (s *GormRefreshTokenStore) Rotate(hash []byte, now time.Time, ttl time.Duration) (RotateResult, error) {
+var ErrInvalidRefresh = errors.New("invalid refresh token")
+
+func (s *GormRefreshTokenStore) Rotate(
+	hash []byte,
+	now time.Time,
+	ttl time.Duration,
+) (RotateResult, error) {
 	var out RotateResult
 
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
 		var rt models.RefreshToken
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Preload("User.Role").
-			Where("token_hash = ? AND expires_at > ?", hash, now).
+			Where("token_hash = ? AND expires_at > ? AND revoked = ?", hash, now, false).
 			First(&rt).Error; err != nil {
 
-			return errors.New("invalid refresh token")
+			return ErrInvalidRefresh
+		}
+
+		// Set existing token is revoked
+		if err := tx.Model(&rt).Update("revoked", true).Error; err != nil {
+			return err
 		}
 
 		// Generate the *next* token
@@ -51,11 +63,15 @@ func (s *GormRefreshTokenStore) Rotate(hash []byte, now time.Time, ttl time.Dura
 			return err
 		}
 
-		// Persist the rotation
-		rt.TokenHash = newHash
-		rt.ExpiresAt = now.Add(ttl)
+		// Create and persist new token
+		newRT := models.RefreshToken{
+			TokenHash: newHash,
+			UserID:    rt.UserID,
+			ExpiresAt: now.Add(ttl),
+			Revoked:   false,
+		}
 
-		if err := tx.Save(&rt).Error; err != nil {
+		if err := tx.Create(&newRT).Error; err != nil {
 			return err
 		}
 
@@ -68,4 +84,10 @@ func (s *GormRefreshTokenStore) Rotate(hash []byte, now time.Time, ttl time.Dura
 	})
 
 	return out, err
+}
+
+func (s *GormRefreshTokenStore) RevokeRefreshToken(tokenHash []byte) error {
+	return s.DB.Model(&models.RefreshToken{}).
+		Where("token_hash = ?", tokenHash).
+		Update("revoked", true).Error
 }

@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"errors"
-	"log"
+
 	"net/http"
 	"time"
 
@@ -29,6 +29,10 @@ type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
 }
 
+type LogoutRequest struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
 type AuthHandler struct {
 	UserStore         stores.UserStore
 	RefreshTokenStore stores.RefreshTokenStore
@@ -36,6 +40,9 @@ type AuthHandler struct {
 	Hasher            user.PasswordHasher
 	TokenService      token.TokenService
 }
+
+const RefreshTokenExpiration time.Duration = 7 * 24 * time.Hour
+const AccessTokenExpiration time.Duration = 15 * time.Minute
 
 // NewAuthHandler constructs an AuthHandler.
 func NewAuthHandler(
@@ -119,7 +126,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	// Create JWT token
-	tokenString, err := h.TokenService.GenerateAccessToken(user.ID, user.Role.Name, 30*time.Minute)
+	tokenString, err := h.TokenService.GenerateAccessToken(user.ID, user.Role.Name, AccessTokenExpiration)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not sign token"})
 		return
@@ -174,8 +181,6 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 	})
 }
 
-var errInvalidRefresh = errors.New("invalid refresh token")
-
 func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	var req RefreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -185,26 +190,19 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 
 	hash := h.TokenService.HashRefreshToken(req.RefreshToken)
 
-	res, err := h.RefreshTokenStore.Rotate(
-		hash,
-		time.Now(),
-		7*24*time.Hour)
+	res, err := h.RefreshTokenStore.Rotate(hash, time.Now(), RefreshTokenExpiration)
 
 	if err != nil {
-		if errors.Is(err, errInvalidRefresh) {
+		if errors.Is(err, stores.ErrInvalidRefresh) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
-		} else {
-			log.Printf("refresh-tx error: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
+			return
 		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "server error"})
 		return
 	}
 
 	// Create JWT token
-	accessTokenString, err := h.TokenService.GenerateAccessToken(
-		res.UserID,
-		res.RoleName,
-		30*time.Minute)
+	accessTokenString, err := h.TokenService.GenerateAccessToken(res.UserID, res.RoleName, AccessTokenExpiration)
 	if err != nil {
 		return
 	}
@@ -216,4 +214,22 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		"token":         c.MustGet("token"),
 		"refresh_token": c.MustGet("refresh_token"),
 	})
+}
+
+func (h *AuthHandler) Logout(c *gin.Context) {
+	var req LogoutRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	hashed := h.TokenService.HashRefreshToken(req.RefreshToken)
+
+	err := h.RefreshTokenStore.RevokeRefreshToken(hashed)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not revoke refresh token"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "logout successful"})
 }
