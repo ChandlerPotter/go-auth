@@ -202,7 +202,10 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	}
 
 	// Create JWT token
-	accessTokenString, _ := h.TokenService.GenerateAccessToken(res.UserID, res.RoleName, AccessTokenExpiration)
+	accessTokenString, err := h.TokenService.GenerateAccessToken(res.UserID, res.RoleName, AccessTokenExpiration)
+	if err != nil {
+		return
+	}
 
 	c.Set("token", accessTokenString)
 	c.Set("refresh_token", res.NewRaw)
