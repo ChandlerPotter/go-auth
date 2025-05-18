@@ -22,7 +22,7 @@ type RefreshTokenStore interface {
 	Rotate(hash []byte, now time.Time, ttl time.Duration) (RotateResult, error)
 }
 
-// GormUserStore implements UserStore using GORM.
+// GormUserStore implements RefreshTokenStore using GORM.
 type GormRefreshTokenStore struct {
 	DB           *gorm.DB
 	TokenService token.TokenService
