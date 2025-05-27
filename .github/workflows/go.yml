@@ -24,3 +24,5 @@ jobs:
 
     - name: Build
       run: go build -v cmd/main.go
+    - name: Test
+      run: go test
