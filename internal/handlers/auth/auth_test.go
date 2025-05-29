@@ -16,11 +16,6 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-type stubHasher struct{}
-
-func (stubHasher) Hash(p []byte) ([]byte, error) { return []byte("hashed-" + string(p)), nil }
-func (stubHasher) Compare(_, _ []byte) error     { return nil }
-
 func TestRegister(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
